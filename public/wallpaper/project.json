@@ -1,0 +1,14 @@
+{
+  "contentrating": "Everyone",
+  "description": "粒子流动：实心圆点组成的粒子场，随倾斜缓缓流动。预留打包模板，用法见仓库 README。",
+  "file": "index.html",
+  "general": {
+    "supportsaudioprocessing": false,
+    "type": "web"
+  },
+  "preview": "preview.png",
+  "tags": ["Particle", "Abstract"],
+  "title": "粒子流动 ParticleFlow",
+  "type": "wallpaper",
+  "version": 1
+}

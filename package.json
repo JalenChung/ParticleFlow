@@ -1,0 +1,27 @@
+{
+  "name": "particle-flow",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:http": "HTTPS=0 vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "pixi.js": "^8.0.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "@vitejs/plugin-basic-ssl": "^2.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0",
+    "vue-tsc": "^2.2.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}
