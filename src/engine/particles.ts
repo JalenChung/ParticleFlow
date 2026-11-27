@@ -4,7 +4,7 @@ export interface Tilt {
   y: number;
 }
 
-export interface BottomPulse extends Tilt {
+export interface RadialPulse extends Tilt {
   /** 脉冲源在屏幕坐标中的位置（px） */
   originX: number;
   originY: number;
@@ -15,6 +15,8 @@ export interface BottomPulse extends Tilt {
   /** 当前脉冲强度（px/s²） */
   strength: number;
 }
+
+export type BottomPulse = RadialPulse;
 
 export interface Particle {
   x: number;
@@ -184,9 +186,16 @@ export class ParticleField {
    * 推进一帧仿真（dt 单位：秒）。
    * @param gravity 重力方向（归一化，由陀螺仪倾斜决定；无输入时 (0,1) 即竖直向下）
    * @param shake   晃动产生的线性加速度（px/s²），由加速度计提供，可省略
-   * @param bottomPulse 底部脉冲；originX 为脉冲在底部中间的出发点
+   * @param radialPulses 从指定圆心向外扩散的力脉冲
    */
-  update(dt: number, gravity: Tilt, shake?: Tilt, bottomPulse?: BottomPulse): void {
+  update(
+    dt: number,
+    gravity: Tilt,
+    shake?: Tilt,
+    radialPulses: RadialPulse | readonly RadialPulse[] = [],
+  ): void {
+    const pulses: readonly RadialPulse[] =
+      'originX' in radialPulses ? [radialPulses] : radialPulses;
     for (const p of this.particles) {
       p.highlightCooldown = Math.max(0, p.highlightCooldown - dt);
     }
@@ -197,21 +206,24 @@ export class ParticleField {
       shake.x * shake.x + shake.y * shake.y > WAKE_SHAKE * WAKE_SHAKE;
     if (shaken) this.wakeAll();
 
-    // 充电脉冲以圆形波前向外扩散，只唤醒波带经过的粒子。
-    if (bottomPulse && bottomPulse.strength > 1) {
+    // 径向脉冲只唤醒波带经过的粒子。
+    if (pulses.length > 0) {
       for (const p of this.particles) {
-        const dx = p.x - bottomPulse.originX;
-        const dy = p.y - bottomPulse.originY;
-        const distance = Math.hypot(dx, dy);
-        const ringDistance = Math.abs(distance - bottomPulse.waveRadius);
-        const influence = Math.max(0, 1 - ringDistance / bottomPulse.waveWidth);
-        if (influence <= 0) continue;
-        if (p.sleep >= SLEEP_TIME) {
-          p.ox = p.x;
-          p.oy = p.y;
+        for (const pulse of pulses) {
+          if (pulse.strength <= 1) continue;
+          const dx = p.x - pulse.originX;
+          const dy = p.y - pulse.originY;
+          const distance = Math.hypot(dx, dy);
+          const ringDistance = Math.abs(distance - pulse.waveRadius);
+          const influence = Math.max(0, 1 - ringDistance / pulse.waveWidth);
+          if (influence <= 0) continue;
+          if (p.sleep >= SLEEP_TIME) {
+            p.ox = p.x;
+            p.oy = p.y;
+          }
+          p.sleep = 0;
+          this.highlightParticle(p, pulse.strength * influence);
         }
-        p.sleep = 0;
-        this.highlightParticle(p, bottomPulse.strength * influence);
       }
     }
 
@@ -241,14 +253,14 @@ export class ParticleField {
     const iters =
       this.particles.length > PBD_ITER_THRESHOLD ? PBD_ITER_LOW : PBD_ITER;
     const h = dt / SUBSTEPS;
-    for (let s = 0; s < SUBSTEPS; s++) this.step(h, gravity, shake, bottomPulse, iters);
+    for (let s = 0; s < SUBSTEPS; s++) this.step(h, gravity, shake, pulses, iters);
   }
 
   private step(
     dt: number,
     gravity: Tilt,
     shake: Tilt | undefined,
-    bottomPulse: BottomPulse | undefined,
+    radialPulses: readonly RadialPulse[],
     iters: number,
   ): void {
     // 1) 预测：积分速度 → 记录起点 → 推进位置
@@ -261,15 +273,15 @@ export class ParticleField {
 
       let pulseGx = 0;
       let pulseGy = 0;
-      if (bottomPulse) {
-        const dx = p.x - bottomPulse.originX;
-        const dy = p.y - bottomPulse.originY;
+      for (const pulse of radialPulses) {
+        const dx = p.x - pulse.originX;
+        const dy = p.y - pulse.originY;
         const distance = Math.hypot(dx, dy);
-        const ringDistance = Math.abs(distance - bottomPulse.waveRadius);
-        const influence = Math.max(0, 1 - ringDistance / bottomPulse.waveWidth);
+        const ringDistance = Math.abs(distance - pulse.waveRadius);
+        const influence = Math.max(0, 1 - ringDistance / pulse.waveWidth);
         if (distance > 0.01 && influence > 0) {
-          pulseGx = (dx / distance) * bottomPulse.strength * influence;
-          pulseGy = (dy / distance) * bottomPulse.strength * influence;
+          pulseGx += (dx / distance) * pulse.strength * influence;
+          pulseGy += (dy / distance) * pulse.strength * influence;
         }
       }
 

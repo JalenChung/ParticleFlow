@@ -4,7 +4,7 @@ import { Application, Graphics, Sprite, type Texture, type Ticker } from 'pixi.j
 import {
   DEFAULT_HIGHLIGHT_SETTINGS,
   ParticleField,
-  type BottomPulse,
+  type RadialPulse,
 } from '../engine/particles';
 import { createDeviceOrientationProvider } from '../input/deviceOrientation';
 import type { TiltStatus } from '../input/tilt';
@@ -40,6 +40,8 @@ let resizeTimer: number | undefined;
 let batteryManager: (EventTarget & { charging: boolean }) | null = null;
 let charging = false;
 let chargeElapsed = 0;
+let clickPulseOrigin: { x: number; y: number } | null = null;
+let clickPulseElapsed = 0;
 let disposed = false;
 
 watch(highlightSettings, (settings) => {
@@ -48,6 +50,15 @@ watch(highlightSettings, (settings) => {
 
 function onDocumentPointerDown(event: PointerEvent): void {
   if (!settingsEl.value?.contains(event.target as Node)) settingsOpen.value = false;
+}
+
+function onCanvasPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || event.pointerType !== 'mouse') return;
+  const host = hostEl.value;
+  if (!host) return;
+  const rect = host.getBoundingClientRect();
+  clickPulseOrigin = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  clickPulseElapsed = 0;
 }
 
 function onDocumentKeyDown(event: KeyboardEvent): void {
@@ -135,14 +146,14 @@ onMounted(async () => {
   pixi.ticker.add((ticker: Ticker) => {
     if (!field) return;
     const dt = Math.min(ticker.deltaMS, 66) / 1000; // 掉帧时防止一次跳太远
-    let bottomPulse: BottomPulse | undefined;
+    const radialPulses: RadialPulse[] = [];
     if (charging) {
       chargeElapsed += dt;
       const phase = (chargeElapsed % CHARGE_PULSE_PERIOD) / CHARGE_PULSE_PERIOD;
       if (phase < CHARGE_PULSE_DURATION) {
         const progress = phase / CHARGE_PULSE_DURATION;
         const strength = Math.sin(progress * Math.PI);
-        bottomPulse = {
+        radialPulses.push({
           x: 0,
           y: 0,
           originX: host.clientWidth / 2,
@@ -150,10 +161,37 @@ onMounted(async () => {
           waveRadius: host.clientHeight * 0.5 * progress,
           waveWidth: Math.max(50, host.clientHeight * 0.065),
           strength: 4500 * strength,
-        };
+        });
       }
     }
-    field.update(dt, provider.tilt, provider.shake, bottomPulse);
+    if (clickPulseOrigin) {
+      clickPulseElapsed += dt;
+      const progress = clickPulseElapsed / CHARGE_PULSE_DURATION;
+      if (progress < 1) {
+        const width = host.clientWidth;
+        const height = host.clientHeight;
+        const originX = clickPulseOrigin.x;
+        const originY = clickPulseOrigin.y;
+        const maxRadius = Math.max(
+          Math.hypot(originX, originY),
+          Math.hypot(width - originX, originY),
+          Math.hypot(originX, height - originY),
+          Math.hypot(width - originX, height - originY),
+        );
+        radialPulses.push({
+          x: 0,
+          y: 0,
+          originX,
+          originY,
+          waveRadius: maxRadius * progress,
+          waveWidth: Math.max(50, height * 0.065),
+          strength: 4500 * Math.sin(progress * Math.PI),
+        });
+      } else {
+        clickPulseOrigin = null;
+      }
+    }
+    field.update(dt, provider.tilt, provider.shake, radialPulses);
     const list = field.particles;
     for (let i = 0; i < sprites.length; i++) {
       sprites[i].position.set(list[i].x, list[i].y);
@@ -216,7 +254,7 @@ function mixColor(from: number, to: number, amount: number): number {
 
 <template>
   <div class="scene">
-    <div ref="hostEl" class="particle-host"></div>
+    <div ref="hostEl" class="particle-host" @pointerdown="onCanvasPointerDown"></div>
     <div ref="settingsEl" class="settings">
       <button
         class="settings-toggle"
