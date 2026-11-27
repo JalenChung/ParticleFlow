@@ -25,6 +25,8 @@ export interface Particle {
   highlight: number;
   /** 高亮初始强度（0~1），随力的大小变化 */
   highlightStrength: number;
+  /** 高频受力触发防抖冷却（秒） */
+  highlightCooldown: number;
   /** 本子步约束求解前的预测位置（速度由位置变化量导出用） */
   ox: number;
   oy: number;
@@ -35,9 +37,24 @@ export interface Particle {
   sgy: number;
 }
 
-export const PARTICLE_HIGHLIGHT_DURATION = 0.6;
+export const PARTICLE_HIGHLIGHT_DURATION = 0.55;
 const HIGHLIGHT_MIN_FORCE = 2200;
 const HIGHLIGHT_FULL_FORCE = 10000;
+const HIGHLIGHT_COOLDOWN = 0.3;
+
+export interface HighlightSettings {
+  debounceEnabled: boolean;
+  cooldownDuration: number;
+  fadeDuration: number;
+  minimumForce: number;
+}
+
+export const DEFAULT_HIGHLIGHT_SETTINGS: HighlightSettings = {
+  debounceEnabled: true,
+  cooldownDuration: HIGHLIGHT_COOLDOWN,
+  fadeDuration: PARTICLE_HIGHLIGHT_DURATION,
+  minimumForce: HIGHLIGHT_MIN_FORCE,
+};
 
 // ---- 物理参数（调手感改这里）----
 /** 重力加速度（px/s²） */
@@ -110,6 +127,7 @@ const WAKE_DOT = Math.cos((WAKE_GRAVITY_DEG * Math.PI) / 180);
  */
 export class ParticleField {
   readonly particles: Particle[] = [];
+  private highlightSettings: HighlightSettings = { ...DEFAULT_HIGHLIGHT_SETTINGS };
   private width: number;
   private height: number;
   private diameter: number;
@@ -132,6 +150,10 @@ export class ParticleField {
     this.height = height;
     this.diameter = diameter;
     this.setCount(count);
+  }
+
+  setHighlightSettings(settings: HighlightSettings): void {
+    this.highlightSettings = { ...settings };
   }
 
   /** 调整粒子数量（窗口尺寸变化时调用） */
@@ -162,6 +184,10 @@ export class ParticleField {
    * @param bottomPulse 底部脉冲；originX 为脉冲在底部中间的出发点
    */
   update(dt: number, gravity: Tilt, shake?: Tilt, bottomPulse?: BottomPulse): void {
+    for (const p of this.particles) {
+      p.highlightCooldown = Math.max(0, p.highlightCooldown - dt);
+    }
+
     // 明显晃动 → 唤醒全部
     const shaken =
       shake !== undefined &&
@@ -512,12 +538,15 @@ export class ParticleField {
   }
 
   private highlightParticle(particle: Particle, forceMagnitude: number): void {
-    if (forceMagnitude <= HIGHLIGHT_MIN_FORCE) return;
+    if (forceMagnitude <= this.highlightSettings.minimumForce) return;
+    if (this.highlightSettings.debounceEnabled && particle.highlightCooldown > 0) return;
     const normalizedForce = Math.min(
       1,
-      (forceMagnitude - HIGHLIGHT_MIN_FORCE) / (HIGHLIGHT_FULL_FORCE - HIGHLIGHT_MIN_FORCE),
+      (forceMagnitude - this.highlightSettings.minimumForce) /
+        (HIGHLIGHT_FULL_FORCE - this.highlightSettings.minimumForce),
     );
-    particle.highlight = PARTICLE_HIGHLIGHT_DURATION;
+    particle.highlight = this.highlightSettings.fadeDuration;
+    particle.highlightCooldown = this.highlightSettings.cooldownDuration;
     particle.highlightStrength = Math.max(
       particle.highlightStrength,
       Math.sqrt(normalizedForce),
@@ -545,6 +574,7 @@ export class ParticleField {
       vy: 0,
       highlight: 0,
       highlightStrength: 0,
+      highlightCooldown: 0,
       ox: x,
       oy: y,
       sleep: 0,
