@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { Application, Graphics, Sprite, type Texture, type Ticker } from 'pixi.js';
-import { ParticleField } from '../engine/particles';
+import { ParticleField, type BottomPulse } from '../engine/particles';
 import { createDeviceOrientationProvider } from '../input/deviceOrientation';
 import type { TiltStatus } from '../input/tilt';
 import { diameterPx, particleCountFor, PARTICLE_DIAMETER_MM } from '../utils/size';
 
 // ---- 可调参数：粒子颜色 ----
 const PARTICLE_COLOR = 0x9adcff;
+const CHARGE_PULSE_PERIOD = 1.4;
+const CHARGE_PULSE_DURATION = 0.38;
 
 const STATUS_TEXT: Record<TiltStatus, string> = {
   waiting: '正在等待陀螺仪数据…',
@@ -27,6 +29,10 @@ let texture: Texture | null = null;
 let sprites: Sprite[] = [];
 let observer: ResizeObserver | null = null;
 let resizeTimer: number | undefined;
+let batteryManager: (EventTarget & { charging: boolean }) | null = null;
+let charging = false;
+let chargeElapsed = 0;
+let disposed = false;
 
 /** 根据粒子数量同步精灵池（增/删 Sprite） */
 function rebuildSprites(): void {
@@ -87,11 +93,39 @@ onMounted(async () => {
   provider.onStatusChange = (s) => (status.value = s);
   provider.start();
 
+  // Battery Status API is optional and unavailable in some browsers.
+  const getBattery = (
+    navigator as Navigator & {
+      getBattery?: () => Promise<EventTarget & { charging: boolean }>;
+    }
+  ).getBattery;
+  if (typeof getBattery === 'function') {
+    void getBattery.call(navigator).then((battery) => {
+      if (disposed) return;
+      batteryManager = battery;
+      charging = battery.charging;
+      battery.addEventListener('chargingchange', onChargingChange);
+    }).catch(() => {});
+  }
+
   // 主循环
   pixi.ticker.add((ticker: Ticker) => {
     if (!field) return;
     const dt = Math.min(ticker.deltaMS, 66) / 1000; // 掉帧时防止一次跳太远
-    field.update(dt, provider.tilt, provider.shake);
+    let bottomPulse: BottomPulse | undefined;
+    if (charging) {
+      chargeElapsed += dt;
+      const phase = (chargeElapsed % CHARGE_PULSE_PERIOD) / CHARGE_PULSE_PERIOD;
+      if (phase < CHARGE_PULSE_DURATION) {
+        const strength = Math.sin((phase / CHARGE_PULSE_DURATION) * Math.PI);
+        bottomPulse = {
+          x: 0,
+          y: -4500 * strength,
+          originX: host.clientWidth / 2,
+        };
+      }
+    }
+    field.update(dt, provider.tilt, provider.shake, bottomPulse);
     const list = field.particles;
     for (let i = 0; i < sprites.length; i++) {
       sprites[i].position.set(list[i].x, list[i].y);
@@ -117,8 +151,11 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   provider.stop();
   provider.onStatusChange = undefined;
+  batteryManager?.removeEventListener('chargingchange', onChargingChange);
+  batteryManager = null;
   observer?.disconnect();
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
   document.removeEventListener('visibilitychange', onVisibility);
@@ -130,6 +167,10 @@ onBeforeUnmount(() => {
     sprites = [];
   }
 });
+
+function onChargingChange(): void {
+  if (batteryManager) charging = batteryManager.charging;
+}
 </script>
 
 <template>

@@ -4,6 +4,11 @@ export interface Tilt {
   y: number;
 }
 
+export interface BottomPulse extends Tilt {
+  /** 脉冲源在屏幕坐标中的横向中心位置（px） */
+  originX: number;
+}
+
 export interface Particle {
   x: number;
   y: number;
@@ -139,13 +144,32 @@ export class ParticleField {
    * 推进一帧仿真（dt 单位：秒）。
    * @param gravity 重力方向（归一化，由陀螺仪倾斜决定；无输入时 (0,1) 即竖直向下）
    * @param shake   晃动产生的线性加速度（px/s²），由加速度计提供，可省略
+   * @param bottomPulse 底部脉冲；originX 为脉冲在底部中间的出发点
    */
-  update(dt: number, gravity: Tilt, shake?: Tilt): void {
+  update(dt: number, gravity: Tilt, shake?: Tilt, bottomPulse?: BottomPulse): void {
     // 明显晃动 → 唤醒全部
     const shaken =
       shake !== undefined &&
       shake.x * shake.x + shake.y * shake.y > WAKE_SHAKE * WAKE_SHAKE;
     if (shaken) this.wakeAll();
+
+    // 充电脉冲只唤醒底部中间区域。
+    if (bottomPulse && Math.hypot(bottomPulse.x, bottomPulse.y) > 1) {
+      const verticalZone = Math.max(this.height * 0.22, this.diameter);
+      const pulseTop = this.height - verticalZone;
+      const horizontalRadius = Math.max(this.width * 0.22, this.diameter);
+      for (const p of this.particles) {
+        const dx = p.x - bottomPulse.originX;
+        const vertical = Math.max(0, Math.min(1, (p.y - pulseTop) / verticalZone));
+        const horizontal = Math.max(0, 1 - Math.abs(dx) / horizontalRadius);
+        if (vertical * horizontal <= 0) continue;
+        if (p.sleep >= SLEEP_TIME) {
+          p.ox = p.x;
+          p.oy = p.y;
+        }
+        p.sleep = 0;
+      }
+    }
 
     // 累计偏转唤醒：逐粒子对比“入睡时的重力方向”（非逐帧差分！），
     // 无论多慢的旋转/翻转，累计偏转一超过阈值就当帧唤醒——零等待。
@@ -173,23 +197,34 @@ export class ParticleField {
     const iters =
       this.particles.length > PBD_ITER_THRESHOLD ? PBD_ITER_LOW : PBD_ITER;
     const h = dt / SUBSTEPS;
-    for (let s = 0; s < SUBSTEPS; s++) this.step(h, gravity, shake, iters);
+    for (let s = 0; s < SUBSTEPS; s++) this.step(h, gravity, shake, bottomPulse, iters);
   }
 
   private step(
     dt: number,
     gravity: Tilt,
     shake: Tilt | undefined,
+    bottomPulse: BottomPulse | undefined,
     iters: number,
   ): void {
-    const gx = gravity.x * GRAVITY + (shake?.x ?? 0);
-    const gy = gravity.y * GRAVITY + (shake?.y ?? 0);
+    const verticalZone = Math.max(this.height * 0.22, this.diameter);
+    const pulseTop = this.height - verticalZone;
+    const horizontalRadius = Math.max(this.width * 0.22, this.diameter);
 
     // 1) 预测：积分速度 → 记录起点 → 推进位置
     const damp = Math.exp(-AIR_DAMP * dt);
     const max2 = MAX_SPEED * MAX_SPEED;
     for (const p of this.particles) {
       if (p.sleep >= SLEEP_TIME) continue;
+      const vertical = bottomPulse
+        ? Math.max(0, Math.min(1, (p.y - pulseTop) / verticalZone))
+        : 0;
+      const horizontal = bottomPulse
+        ? Math.max(0, 1 - Math.abs(p.x - bottomPulse.originX) / horizontalRadius)
+        : 0;
+      const influence = vertical * horizontal;
+      const gx = gravity.x * GRAVITY + (shake?.x ?? 0) + (bottomPulse?.x ?? 0) * influence;
+      const gy = gravity.y * GRAVITY + (shake?.y ?? 0) + (bottomPulse?.y ?? 0) * influence;
       p.vx = (p.vx + gx * dt) * damp;
       p.vy = (p.vy + gy * dt) * damp;
       const sp2 = p.vx * p.vx + p.vy * p.vy;
