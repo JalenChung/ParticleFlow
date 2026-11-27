@@ -272,15 +272,28 @@ function mixColor(from: number, to: number, amount: number): number {
           </label>
           <label class="setting-row">
             <span class="setting-label">
-              <span>高亮触发阈值</span>
-              <output>{{ highlightSettings.minimumForce }}</output>
+              <span>高亮触发加速度阈值</span>
+              <output>{{ highlightSettings.minimumHighlightAcceleration }} px/s²</output>
             </span>
             <input
-              v-model.number="highlightSettings.minimumForce"
+              v-model.number="highlightSettings.minimumHighlightAcceleration"
               type="range"
               min="500"
               max="8000"
               step="100"
+            />
+          </label>
+          <label class="setting-row">
+            <span class="setting-label">
+              <span>高亮最小碰撞速度</span>
+              <output>{{ highlightSettings.minimumImpactSpeed }} px/s</output>
+            </span>
+            <input
+              v-model.number="highlightSettings.minimumImpactSpeed"
+              type="range"
+              min="15"
+              max="40"
+              step="5"
             />
           </label>
         </section>

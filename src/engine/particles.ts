@@ -38,22 +38,25 @@ export interface Particle {
 }
 
 export const PARTICLE_HIGHLIGHT_DURATION = 0.55;
-const HIGHLIGHT_MIN_FORCE = 2200;
-const HIGHLIGHT_FULL_FORCE = 10000;
+const HIGHLIGHT_MIN_ACCELERATION = 2200;
+const HIGHLIGHT_FULL_ACCELERATION = 10000;
 const HIGHLIGHT_COOLDOWN = 0.3;
+const HIGHLIGHT_MIN_IMPACT_SPEED = 25;
 
 export interface HighlightSettings {
   debounceEnabled: boolean;
   cooldownDuration: number;
   fadeDuration: number;
-  minimumForce: number;
+  minimumHighlightAcceleration: number;
+  minimumImpactSpeed: number;
 }
 
 export const DEFAULT_HIGHLIGHT_SETTINGS: HighlightSettings = {
   debounceEnabled: true,
   cooldownDuration: HIGHLIGHT_COOLDOWN,
   fadeDuration: PARTICLE_HIGHLIGHT_DURATION,
-  minimumForce: HIGHLIGHT_MIN_FORCE,
+  minimumHighlightAcceleration: HIGHLIGHT_MIN_ACCELERATION,
+  minimumImpactSpeed: HIGHLIGHT_MIN_IMPACT_SPEED,
 };
 
 // ---- 物理参数（调手感改这里）----
@@ -453,6 +456,9 @@ export class ParticleField {
     const d2 = dx * dx + dy * dy;
     const D = this.diameter;
     if (d2 >= D * D || d2 === 0) return;
+    const startDx = pj.ox - pi.ox;
+    const startDy = pj.oy - pi.oy;
+    const newlyContacting = startDx * startDx + startDy * startDy >= D * D;
 
     const asleepI = pi.sleep >= SLEEP_TIME;
     const asleepJ = pj.sleep >= SLEEP_TIME;
@@ -470,7 +476,17 @@ export class ParticleField {
       const approach = -(rvx * nx + rvy * ny); // > 0 = 相互接近
       if (overlap < WAKE_OVERLAP && approach < WAKE_SPEED) {
         // 静态求解：只推醒着的一方（睡眠方是"地面"，不动）
-        this.applyCorr(pi, pj, nx, ny, overlap, asleepI ? 0 : 1, asleepJ ? 0 : 1, dt);
+        this.applyCorr(
+          pi,
+          pj,
+          nx,
+          ny,
+          overlap,
+          asleepI ? 0 : 1,
+          asleepJ ? 0 : 1,
+          dt,
+          newlyContacting,
+        );
         return;
       }
       // 唤醒：位置/起点对齐，避免速度导出用到陈旧数据
@@ -486,7 +502,7 @@ export class ParticleField {
       }
     }
 
-    this.applyCorr(pi, pj, nx, ny, overlap, 1, 1, dt);
+    this.applyCorr(pi, pj, nx, ny, overlap, 1, 1, dt, newlyContacting);
   }
 
   /** 应用位置分离 + 切向摩擦（wi/wj = 各方可移动权重，休眠方为 0） */
@@ -499,6 +515,7 @@ export class ParticleField {
     wi: number,
     wj: number,
     dt: number,
+    newlyContacting: boolean,
   ): void {
     const wSum = wi + wj;
     if (wSum === 0) return;
@@ -506,9 +523,12 @@ export class ParticleField {
     // 位置分离：推开超出容差的重叠
     const corr = Math.min(Math.max(overlap - SLOP, 0), this.diameter * 0.5);
     if (corr > 0) {
-      const forceMagnitude = dt > 0 ? corr / (dt * dt) : 0;
-      if (wi > 0) this.highlightParticle(pi, forceMagnitude);
-      if (wj > 0) this.highlightParticle(pj, forceMagnitude);
+      const correctionAcceleration = dt > 0 ? corr / (dt * dt) : 0;
+      const approachSpeed = -((pj.vx - pi.vx) * nx + (pj.vy - pi.vy) * ny);
+      if (newlyContacting && approachSpeed > this.highlightSettings.minimumImpactSpeed) {
+        if (wi > 0) this.highlightParticle(pi, correctionAcceleration);
+        if (wj > 0) this.highlightParticle(pj, correctionAcceleration);
+      }
     }
     const ci = (corr * wi) / wSum;
     const cj = (corr * wj) / wSum;
@@ -537,13 +557,13 @@ export class ParticleField {
     pj.y -= ty * tj;
   }
 
-  private highlightParticle(particle: Particle, forceMagnitude: number): void {
-    if (forceMagnitude <= this.highlightSettings.minimumForce) return;
+  private highlightParticle(particle: Particle, accelerationMagnitude: number): void {
+    if (accelerationMagnitude <= this.highlightSettings.minimumHighlightAcceleration) return;
     if (this.highlightSettings.debounceEnabled && particle.highlightCooldown > 0) return;
     const normalizedForce = Math.min(
       1,
-      (forceMagnitude - this.highlightSettings.minimumForce) /
-        (HIGHLIGHT_FULL_FORCE - this.highlightSettings.minimumForce),
+      (accelerationMagnitude - this.highlightSettings.minimumHighlightAcceleration) /
+        (HIGHLIGHT_FULL_ACCELERATION - this.highlightSettings.minimumHighlightAcceleration),
     );
     particle.highlight = this.highlightSettings.fadeDuration;
     particle.highlightCooldown = this.highlightSettings.cooldownDuration;
