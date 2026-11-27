@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { Application, Graphics, Sprite, type Texture, type Ticker } from 'pixi.js';
-import { ParticleField, type BottomPulse } from '../engine/particles';
+import {
+  PARTICLE_HIGHLIGHT_DURATION,
+  ParticleField,
+  type BottomPulse,
+} from '../engine/particles';
 import { createDeviceOrientationProvider } from '../input/deviceOrientation';
 import type { TiltStatus } from '../input/tilt';
 import { diameterPx, particleCountFor, PARTICLE_DIAMETER_MM } from '../utils/size';
 
 // ---- 可调参数：粒子颜色 ----
-const PARTICLE_COLOR = 0x9adcff;
-const CHARGE_PULSE_PERIOD = 1.4;
-const CHARGE_PULSE_DURATION = 0.38;
+const PARTICLE_COLOR = 0x2868a8;
+const HIGHLIGHT_COLOR = 0x55c8ff;
+const CHARGE_PULSE_PERIOD = 2.2;
+const CHARGE_PULSE_DURATION = 0.55;
 
 const STATUS_TEXT: Record<TiltStatus, string> = {
   waiting: '正在等待陀螺仪数据…',
@@ -117,11 +122,16 @@ onMounted(async () => {
       chargeElapsed += dt;
       const phase = (chargeElapsed % CHARGE_PULSE_PERIOD) / CHARGE_PULSE_PERIOD;
       if (phase < CHARGE_PULSE_DURATION) {
-        const strength = Math.sin((phase / CHARGE_PULSE_DURATION) * Math.PI);
+        const progress = phase / CHARGE_PULSE_DURATION;
+        const strength = Math.sin(progress * Math.PI);
         bottomPulse = {
           x: 0,
-          y: -4500 * strength,
+          y: 0,
           originX: host.clientWidth / 2,
+          originY: host.clientHeight,
+          waveRadius: host.clientHeight * 0.5 * progress,
+          waveWidth: Math.max(50, host.clientHeight * 0.065),
+          strength: 4500 * strength,
         };
       }
     }
@@ -129,6 +139,9 @@ onMounted(async () => {
     const list = field.particles;
     for (let i = 0; i < sprites.length; i++) {
       sprites[i].position.set(list[i].x, list[i].y);
+      const intensity =
+        list[i].highlightStrength * Math.min(1, list[i].highlight / PARTICLE_HIGHLIGHT_DURATION);
+      sprites[i].tint = mixColor(PARTICLE_COLOR, HIGHLIGHT_COLOR, intensity);
     }
   });
 
@@ -170,6 +183,13 @@ onBeforeUnmount(() => {
 
 function onChargingChange(): void {
   if (batteryManager) charging = batteryManager.charging;
+}
+
+function mixColor(from: number, to: number, amount: number): number {
+  const red = Math.round(((from >> 16) & 0xff) * (1 - amount) + ((to >> 16) & 0xff) * amount);
+  const green = Math.round(((from >> 8) & 0xff) * (1 - amount) + ((to >> 8) & 0xff) * amount);
+  const blue = Math.round((from & 0xff) * (1 - amount) + (to & 0xff) * amount);
+  return (red << 16) | (green << 8) | blue;
 }
 </script>
 

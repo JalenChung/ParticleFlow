@@ -5,8 +5,15 @@ export interface Tilt {
 }
 
 export interface BottomPulse extends Tilt {
-  /** 脉冲源在屏幕坐标中的横向中心位置（px） */
+  /** 脉冲源在屏幕坐标中的位置（px） */
   originX: number;
+  originY: number;
+  /** 当前圆形波前的半径（px） */
+  waveRadius: number;
+  /** 圆形波前的厚度（px） */
+  waveWidth: number;
+  /** 当前脉冲强度（px/s²） */
+  strength: number;
 }
 
 export interface Particle {
@@ -14,6 +21,10 @@ export interface Particle {
   y: number;
   vx: number;
   vy: number;
+  /** 粒子间碰撞或充电脉冲高亮剩余时间（秒） */
+  highlight: number;
+  /** 高亮初始强度（0~1），随力的大小变化 */
+  highlightStrength: number;
   /** 本子步约束求解前的预测位置（速度由位置变化量导出用） */
   ox: number;
   oy: number;
@@ -23,6 +34,10 @@ export interface Particle {
   sgx: number;
   sgy: number;
 }
+
+export const PARTICLE_HIGHLIGHT_DURATION = 0.6;
+const HIGHLIGHT_MIN_FORCE = 2200;
+const HIGHLIGHT_FULL_FORCE = 10000;
 
 // ---- 物理参数（调手感改这里）----
 /** 重力加速度（px/s²） */
@@ -72,7 +87,7 @@ const WAKE_SPEED = 60;
 const WAKE_GRAVITY_DEG = 4;
 /** 面内重力最小有效值（≈倾角 4.6°）：太小说明手机近乎平放，方向无意义 */
 const G_MIN_LEN = 0.08;
-/** 明显晃动（px/s²，≈1.5 m/s²）唤醒全部粒子——须刻意晃动，日常手持摆动不唤醒 */
+/** 明显晃动（px/s²，≈1.5 m/s²）唔醒全部粒子——须刻意晃动，日常手持摆动不唤醒 */
 const WAKE_SHAKE = 350;
 /** 撞墙反弹的最小入墙速度（px/s），慢速触墙不弹 */
 const BOUNCE_MIN_SPEED = 40;
@@ -153,21 +168,21 @@ export class ParticleField {
       shake.x * shake.x + shake.y * shake.y > WAKE_SHAKE * WAKE_SHAKE;
     if (shaken) this.wakeAll();
 
-    // 充电脉冲只唤醒底部中间区域。
-    if (bottomPulse && Math.hypot(bottomPulse.x, bottomPulse.y) > 1) {
-      const verticalZone = Math.max(this.height * 0.22, this.diameter);
-      const pulseTop = this.height - verticalZone;
-      const horizontalRadius = Math.max(this.width * 0.22, this.diameter);
+    // 充电脉冲以圆形波前向外扩散，只唤醒波带经过的粒子。
+    if (bottomPulse && bottomPulse.strength > 1) {
       for (const p of this.particles) {
         const dx = p.x - bottomPulse.originX;
-        const vertical = Math.max(0, Math.min(1, (p.y - pulseTop) / verticalZone));
-        const horizontal = Math.max(0, 1 - Math.abs(dx) / horizontalRadius);
-        if (vertical * horizontal <= 0) continue;
+        const dy = p.y - bottomPulse.originY;
+        const distance = Math.hypot(dx, dy);
+        const ringDistance = Math.abs(distance - bottomPulse.waveRadius);
+        const influence = Math.max(0, 1 - ringDistance / bottomPulse.waveWidth);
+        if (influence <= 0) continue;
         if (p.sleep >= SLEEP_TIME) {
           p.ox = p.x;
           p.oy = p.y;
         }
         p.sleep = 0;
+        this.highlightParticle(p, bottomPulse.strength * influence);
       }
     }
 
@@ -207,24 +222,30 @@ export class ParticleField {
     bottomPulse: BottomPulse | undefined,
     iters: number,
   ): void {
-    const verticalZone = Math.max(this.height * 0.22, this.diameter);
-    const pulseTop = this.height - verticalZone;
-    const horizontalRadius = Math.max(this.width * 0.22, this.diameter);
-
     // 1) 预测：积分速度 → 记录起点 → 推进位置
     const damp = Math.exp(-AIR_DAMP * dt);
     const max2 = MAX_SPEED * MAX_SPEED;
     for (const p of this.particles) {
+      p.highlight = Math.max(0, p.highlight - dt);
+      if (p.highlight === 0) p.highlightStrength = 0;
       if (p.sleep >= SLEEP_TIME) continue;
-      const vertical = bottomPulse
-        ? Math.max(0, Math.min(1, (p.y - pulseTop) / verticalZone))
-        : 0;
-      const horizontal = bottomPulse
-        ? Math.max(0, 1 - Math.abs(p.x - bottomPulse.originX) / horizontalRadius)
-        : 0;
-      const influence = vertical * horizontal;
-      const gx = gravity.x * GRAVITY + (shake?.x ?? 0) + (bottomPulse?.x ?? 0) * influence;
-      const gy = gravity.y * GRAVITY + (shake?.y ?? 0) + (bottomPulse?.y ?? 0) * influence;
+
+      let pulseGx = 0;
+      let pulseGy = 0;
+      if (bottomPulse) {
+        const dx = p.x - bottomPulse.originX;
+        const dy = p.y - bottomPulse.originY;
+        const distance = Math.hypot(dx, dy);
+        const ringDistance = Math.abs(distance - bottomPulse.waveRadius);
+        const influence = Math.max(0, 1 - ringDistance / bottomPulse.waveWidth);
+        if (distance > 0.01 && influence > 0) {
+          pulseGx = (dx / distance) * bottomPulse.strength * influence;
+          pulseGy = (dy / distance) * bottomPulse.strength * influence;
+        }
+      }
+
+      const gx = gravity.x * GRAVITY + (shake?.x ?? 0) + pulseGx;
+      const gy = gravity.y * GRAVITY + (shake?.y ?? 0) + pulseGy;
       p.vx = (p.vx + gx * dt) * damp;
       p.vy = (p.vy + gy * dt) * damp;
       const sp2 = p.vx * p.vx + p.vy * p.vy;
@@ -243,7 +264,7 @@ export class ParticleField {
     //    （收尾投影保证结果无穿墙 → 导出速度不含穿墙伪影 → 墙边不抖）
     for (let k = 0; k < iters; k++) {
       this.buildGrid();
-      this.solvePairs();
+      this.solvePairs(dt);
       this.solveWalls();
     }
 
@@ -306,10 +327,16 @@ export class ParticleField {
     const maxY = this.height - r;
     for (const p of this.particles) {
       if (p.sleep >= SLEEP_TIME) continue;
-      if (p.x < r) p.x = r;
-      else if (p.x > maxX) p.x = maxX;
-      if (p.y < r) p.y = r;
-      else if (p.y > maxY) p.y = maxY;
+      if (p.x < r) {
+        p.x = r;
+      } else if (p.x > maxX) {
+        p.x = maxX;
+      }
+      if (p.y < r) {
+        p.y = r;
+      } else if (p.y > maxY) {
+        p.y = maxY;
+      }
     }
   }
 
@@ -350,7 +377,7 @@ export class ParticleField {
    * 高斯-赛德尔于是自堆底把支撑逐层向上传播，深层堆叠一两轮迭代即收敛。
    * 乱序求解支撑传不下去 → 底层被压穿-回弹振铃（深层抖动的真正根源）。
    */
-  private solvePairs(): void {
+  private solvePairs(dt: number): void {
     for (let cy = this.rows - 1; cy >= 0; cy--) {
       for (let cx = 0; cx < this.cols; cx++) {
         let i = this.heads[cy * this.cols + cx];
@@ -363,7 +390,7 @@ export class ParticleField {
               if (gx < 0 || gx >= this.cols) continue;
               let j = this.heads[gy * this.cols + gx];
               while (j !== -1) {
-                if (this.pairFirst(i, j)) this.solvePair(i, j);
+                if (this.pairFirst(i, j)) this.solvePair(i, j, dt);
                 j = this.next[j];
               }
             }
@@ -391,7 +418,7 @@ export class ParticleField {
    * - 重叠分离：按权重推开超出容差的重叠（休眠者视作“地面”，只推醒着的一方）；
    * - 位置级库仑摩擦：消除接触切向滑移，限幅 ±μ×法向修正（库仑锥）。
    */
-  private solvePair(i: number, j: number): void {
+  private solvePair(i: number, j: number, dt: number): void {
     const ps = this.particles;
     const pi = ps[i];
     const pj = ps[j];
@@ -417,7 +444,7 @@ export class ParticleField {
       const approach = -(rvx * nx + rvy * ny); // > 0 = 相互接近
       if (overlap < WAKE_OVERLAP && approach < WAKE_SPEED) {
         // 静态求解：只推醒着的一方（睡眠方是"地面"，不动）
-        this.applyCorr(pi, pj, nx, ny, overlap, asleepI ? 0 : 1, asleepJ ? 0 : 1);
+        this.applyCorr(pi, pj, nx, ny, overlap, asleepI ? 0 : 1, asleepJ ? 0 : 1, dt);
         return;
       }
       // 唤醒：位置/起点对齐，避免速度导出用到陈旧数据
@@ -433,7 +460,7 @@ export class ParticleField {
       }
     }
 
-    this.applyCorr(pi, pj, nx, ny, overlap, 1, 1);
+    this.applyCorr(pi, pj, nx, ny, overlap, 1, 1, dt);
   }
 
   /** 应用位置分离 + 切向摩擦（wi/wj = 各方可移动权重，休眠方为 0） */
@@ -445,12 +472,18 @@ export class ParticleField {
     overlap: number,
     wi: number,
     wj: number,
+    dt: number,
   ): void {
     const wSum = wi + wj;
     if (wSum === 0) return;
 
     // 位置分离：推开超出容差的重叠
     const corr = Math.min(Math.max(overlap - SLOP, 0), this.diameter * 0.5);
+    if (corr > 0) {
+      const forceMagnitude = dt > 0 ? corr / (dt * dt) : 0;
+      if (wi > 0) this.highlightParticle(pi, forceMagnitude);
+      if (wj > 0) this.highlightParticle(pj, forceMagnitude);
+    }
     const ci = (corr * wi) / wSum;
     const cj = (corr * wj) / wSum;
     pi.x -= nx * ci;
@@ -478,6 +511,19 @@ export class ParticleField {
     pj.y -= ty * tj;
   }
 
+  private highlightParticle(particle: Particle, forceMagnitude: number): void {
+    if (forceMagnitude <= HIGHLIGHT_MIN_FORCE) return;
+    const normalizedForce = Math.min(
+      1,
+      (forceMagnitude - HIGHLIGHT_MIN_FORCE) / (HIGHLIGHT_FULL_FORCE - HIGHLIGHT_MIN_FORCE),
+    );
+    particle.highlight = PARTICLE_HIGHLIGHT_DURATION;
+    particle.highlightStrength = Math.max(
+      particle.highlightStrength,
+      Math.sqrt(normalizedForce),
+    );
+  }
+
   /** 唤醒所有粒子（明显晃动时） */
   private wakeAll(): void {
     for (const p of this.particles) {
@@ -497,6 +543,8 @@ export class ParticleField {
       y,
       vx: 0,
       vy: 0,
+      highlight: 0,
+      highlightStrength: 0,
       ox: x,
       oy: y,
       sleep: 0,
